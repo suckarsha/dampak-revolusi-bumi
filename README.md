@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Simulasi Musim & Ekliptika 🌍
 
-## Getting Started
+Simulasi interaktif 3D revolusi Bumi mengelilingi Matahari dalam Bahasa Indonesia.  
+Terinspirasi dari [NAAP Seasons & Ecliptic Simulator](https://astro.unl.edu/naap/motion1/animations/seasons_ecliptic.html).
 
-First, run the development server:
+## ✨ Fitur
+
+- **Tampilan Orbit** — Matahari di tengah, Bumi mengorbit dengan kemiringan sumbu 23.44°
+- **Bola Langit** — Mode geosentris dengan ekliptika dan ekuator langit
+- **Panel Lintang** — Globe Bumi 3D dengan pengamat yang bisa digeser
+- **Panel Cahaya** — Visualisasi sudut dan sebaran cahaya matahari
+- **Timeline Interaktif** — Pilih bulan dan jalankan animasi
+- **Data Real-time** — Deklinasi, asensio rekta, dan altitude matahari
+
+## 🚀 Menjalankan Lokal
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Buka http://localhost:3000
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## 📦 Deploy ke Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# Push ke GitHub, lalu connect di vercel.com
+# Atau gunakan Vercel CLI:
+npx vercel
+```
 
-## Learn More
+## 🛠️ Tech Stack
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Next.js 16** — Framework React
+- **Three.js** — 3D rendering (via @react-three/fiber)
+- **Zustand** — State management
+- **Vanilla CSS** — Custom design system
