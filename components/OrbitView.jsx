@@ -72,47 +72,182 @@ function EarthMesh({ position, tiltAngle, dayOfYear, showSubsolar, size = 0.35 }
 }
 
 /* =============================================
-   Sun with realistic glow
+   Sun with realistic procedural texture (GLSL shader)
    ============================================= */
-function SunMesh() {
-  const glowRef = useRef();
 
-  useFrame((_, delta) => {
+// Custom Sun shader with animated granulation + limb darkening
+const sunVertexShader = `
+  varying vec2 vUv;
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+  void main() {
+    vUv = uv;
+    vNormal = normalize(normalMatrix * normal);
+    vPosition = position;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const sunFragmentShader = `
+  uniform float uTime;
+  varying vec2 vUv;
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+
+  // Simple 3D noise
+  vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec4 permute(vec4 x) { return mod289(((x*34.0)+10.0)*x); }
+  vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+  float snoise(vec3 v) {
+    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i  = floor(v + dot(v, C.yyy));
+    vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g  = step(x0.yzx, x0.xyz);
+    vec3 l  = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+    i = mod289(i);
+    vec4 p = permute(permute(permute(
+              i.z + vec4(0.0, i1.z, i2.z, 1.0))
+            + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+            + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+    float n_ = 0.142857142857;
+    vec3  ns = n_ * D.wyz - D.xzx;
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_);
+    vec4 x = x_ * ns.x + ns.yyyy;
+    vec4 y = y_ * ns.x + ns.yyyy;
+    vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4(x.xy, y.xy);
+    vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0)*2.0 + 1.0;
+    vec4 s1 = floor(b1)*2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+    vec3 p0 = vec3(a0.xy,h.x);
+    vec3 p1 = vec3(a0.zw,h.y);
+    vec3 p2 = vec3(a1.xy,h.z);
+    vec3 p3 = vec3(a1.zw,h.w);
+    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+  }
+
+  void main() {
+    // Animated noise-based surface
+    float t = uTime * 0.08;
+    vec3 pos = vPosition * 3.0;
+    
+    // Multi-octave noise for granulation
+    float n1 = snoise(pos + t * 0.3) * 0.5;
+    float n2 = snoise(pos * 2.5 + t * 0.5) * 0.25;
+    float n3 = snoise(pos * 5.0 + t * 0.2) * 0.125;
+    float n4 = snoise(pos * 10.0 + t * 0.1) * 0.0625;
+    float noise = n1 + n2 + n3 + n4;
+    
+    // Sunspot-like darker patches
+    float spots = smoothstep(0.3, 0.6, snoise(pos * 1.5 - t * 0.1));
+    
+    // Limb darkening — edges appear darker
+    float fresnel = dot(vNormal, vec3(0.0, 0.0, 1.0));
+    float limb = pow(max(fresnel, 0.0), 0.5);
+    
+    // Base colors (photosphere)
+    vec3 hotColor = vec3(1.0, 0.98, 0.85);   // White-yellow center
+    vec3 midColor = vec3(1.0, 0.82, 0.35);   // Golden
+    vec3 coolColor = vec3(0.95, 0.55, 0.15);  // Orange edge
+    vec3 spotColor = vec3(0.7, 0.35, 0.08);   // Dark spots
+    
+    // Mix based on noise and limb
+    vec3 surfaceColor = mix(midColor, hotColor, limb * 0.7 + noise * 0.3);
+    surfaceColor = mix(surfaceColor, coolColor, (1.0 - limb) * 0.6);
+    surfaceColor = mix(surfaceColor, spotColor, spots * 0.2 * (1.0 - limb * 0.5));
+    
+    // Bright granulation edges
+    float granEdge = smoothstep(0.0, 0.15, abs(noise));
+    surfaceColor += vec3(0.1, 0.08, 0.02) * granEdge * limb;
+    
+    // Final brightness with limb darkening
+    surfaceColor *= (0.7 + 0.3 * limb);
+    
+    gl_FragColor = vec4(surfaceColor, 1.0);
+  }
+`;
+
+function SunMesh() {
+  const sunRef = useRef();
+  const glowRef = useRef();
+  const coronaRef = useRef();
+
+  const uniforms = useMemo(() => ({
+    uTime: { value: 0 },
+  }), []);
+
+  useFrame((state) => {
+    uniforms.uTime.value = state.clock.elapsedTime;
+    
+    if (sunRef.current) {
+      sunRef.current.rotation.y += 0.001;
+    }
     if (glowRef.current) {
-      glowRef.current.rotation.z += delta * 0.05;
-      const scale = 1 + Math.sin(Date.now() * 0.002) * 0.02;
+      const scale = 1 + Math.sin(state.clock.elapsedTime * 1.5) * 0.015;
       glowRef.current.scale.setScalar(scale);
+    }
+    if (coronaRef.current) {
+      const scale = 1 + Math.sin(state.clock.elapsedTime * 0.8) * 0.03;
+      coronaRef.current.scale.setScalar(scale);
+      coronaRef.current.rotation.z += 0.002;
     }
   });
 
   return (
     <group>
-      {/* Core sun */}
-      <mesh>
+      {/* Core sun — procedural shader */}
+      <mesh ref={sunRef}>
         <sphereGeometry args={[0.5, 64, 64]} />
-        <meshBasicMaterial color="#fff5d4" />
+        <shaderMaterial
+          vertexShader={sunVertexShader}
+          fragmentShader={sunFragmentShader}
+          uniforms={uniforms}
+        />
       </mesh>
       
-      {/* Inner corona */}
+      {/* Inner corona — warm glow */}
       <mesh ref={glowRef}>
-        <sphereGeometry args={[0.58, 64, 64]} />
-        <meshBasicMaterial color="#fde68a" transparent opacity={0.35} />
+        <sphereGeometry args={[0.56, 64, 64]} />
+        <meshBasicMaterial color="#fde68a" transparent opacity={0.28} />
       </mesh>
 
-      {/* Mid corona */}
-      <mesh>
-        <sphereGeometry args={[0.72, 64, 64]} />
-        <meshBasicMaterial color="#fbbf24" transparent opacity={0.12} />
+      {/* Mid corona — pulsing */}
+      <mesh ref={coronaRef}>
+        <sphereGeometry args={[0.68, 48, 48]} />
+        <meshBasicMaterial color="#fbbf24" transparent opacity={0.1} />
       </mesh>
 
-      {/* Outer glow */}
+      {/* Outer glow — atmosphere */}
       <mesh>
-        <sphereGeometry args={[0.95, 64, 64]} />
+        <sphereGeometry args={[0.85, 32, 32]} />
         <meshBasicMaterial color="#f59e0b" transparent opacity={0.04} />
       </mesh>
 
-      {/* Sun light - very high intensity and low decay so it brightly lights the Earth */}
-      <pointLight color="#ffffff" intensity={15} distance={100} decay={0.5} />
+      {/* Extended glow */}
+      <mesh>
+        <sphereGeometry args={[1.1, 32, 32]} />
+        <meshBasicMaterial color="#f59e0b" transparent opacity={0.015} />
+      </mesh>
+
+      {/* Sun light */}
+      <pointLight color="#fff5e6" intensity={15} distance={100} decay={0.5} />
     </group>
   );
 }
@@ -176,6 +311,8 @@ function SeasonLabels({ show }) {
         const z = Math.sin(label.angle) * 4.3;
         return (
           <Html key={i} position={[x, 0.3, z]} center
+            occlude
+            zIndexRange={[0, 0]}
             style={{
               fontSize: '10px', color: label.color,
               fontFamily: 'Inter, sans-serif', fontWeight: 600,
@@ -213,12 +350,211 @@ function MonthMarkers({ show }) {
 
         return (
           <Html key={i} position={[Math.cos(angle) * r, -0.3, Math.sin(angle) * r]}
-            center style={{ fontSize:'9px', color:'#64748b', fontFamily:'Inter', fontWeight:500, pointerEvents:'none', userSelect:'none' }}>
+            center occlude zIndexRange={[0, 0]}
+            style={{ fontSize:'9px', color:'#64748b', fontFamily:'Inter', fontWeight:500, pointerEvents:'none', userSelect:'none' }}>
             {name}
           </Html>
         );
       })}
     </>
+  );
+}
+
+/* =============================================
+   Zodiac Ring & Line of Sight
+   ============================================= */
+const ZODIACS = [
+  { name: 'Aries', symbol: '♈', color: '#ef4444' },
+  { name: 'Taurus', symbol: '♉', color: '#22c55e' },
+  { name: 'Gemini', symbol: '♊', color: '#eab308' },
+  { name: 'Cancer', symbol: '♋', color: '#3b82f6' },
+  { name: 'Leo', symbol: '♌', color: '#ef4444' },
+  { name: 'Virgo', symbol: '♍', color: '#22c55e' },
+  { name: 'Libra', symbol: '♎', color: '#eab308' },
+  { name: 'Scorpio', symbol: '♏', color: '#3b82f6' },
+  { name: 'Sagittarius', symbol: '♐', color: '#ef4444' },
+  { name: 'Capricorn', symbol: '♑', color: '#22c55e' },
+  { name: 'Aquarius', symbol: '♒', color: '#eab308' },
+  { name: 'Pisces', symbol: '♓', color: '#3b82f6' },
+];
+
+// Pola rasi bintang sederhana (koordinat x, y, z)
+const CONSTELLATION_PATHS = [
+  [[-1, 0.5, 0], [0, -0.5, 0], [1, 0.2, 0]], // Aries
+  [[-1, 1, 0], [0, 0, 0], [1, 1, 0], [0, 0, 0], [0, -1, 0], [0.5, -0.5, 0]], // Taurus
+  [[-0.5, 1, 0], [-0.5, -1, 0], [0, -0.8, 0], [0.5, -1, 0], [0.5, 1, 0], [0, 0.8, 0], [-0.5, 1, 0]], // Gemini
+  [[-0.8, -0.8, 0], [0, 0, 0], [0.8, -0.5, 0], [0, 0, 0], [-0.2, 0.8, 0]], // Cancer
+  [[-1, 0, 0], [-0.5, 0.8, 0], [0, 0.5, 0], [-0.2, 0, 0], [0.5, -0.5, 0], [1, 0, 0]], // Leo
+  [[-1, 1, 0], [-0.5, 0, 0], [0.5, 0.5, 0], [1, -0.5, 0], [0.5, -1, 0], [0, 0, 0]], // Virgo
+  [[-0.8, -0.5, 0], [0, 0.5, 0], [0.8, -0.5, 0], [0.5, -1, 0], [-0.5, -1, 0], [-0.8, -0.5, 0]], // Libra
+  [[-1, 0.8, 0], [-0.5, 0, 0], [0, -0.5, 0], [0.8, -0.8, 0], [1.2, 0, 0], [0.8, 0.5, 0]], // Scorpio
+  [[-1, -0.5, 0], [-0.5, 0.5, 0], [0, 0.8, 0], [0.8, 0, 0], [0, -0.8, 0], [-0.5, 0.5, 0], [-1, -0.5, 0]], // Sagittarius
+  [[-1, 0.8, 0], [0, -0.8, 0], [1, 0.5, 0], [0.5, 0, 0], [0, -0.8, 0]], // Capricorn
+  [[-1, 0, 0], [-0.5, 0.5, 0], [0, -0.5, 0], [0.5, 0.5, 0], [1, 0, 0]], // Aquarius
+  [[-1, 0.8, 0], [-0.5, 0, 0], [0, -0.8, 0], [0.5, -0.2, 0], [1, 0.5, 0], [0.5, -0.2, 0], [0.8, -0.8, 0]] // Pisces
+];
+
+function ConstellationArt({ index, color }) {
+  const points = CONSTELLATION_PATHS[index];
+  const groupRef = useRef();
+
+  useFrame((state) => {
+    if (groupRef.current) {
+      // Efek melayang pelan (floating)
+      groupRef.current.position.y = Math.sin(state.clock.elapsedTime * 1.5 + index) * 0.15;
+    }
+  });
+
+  return (
+    <group ref={groupRef} scale={[0.8, 0.8, 0.8]} position={[0, 0.8, 0]}>
+      {/* Garis penghubung rasi */}
+      <Line points={points} color={color} lineWidth={1.5} transparent opacity={0.5} blending={THREE.AdditiveBlending} />
+      
+      {/* Bintang-bintang di tiap titik */}
+      {points.map((p, i) => (
+        <group key={i} position={p}>
+          <mesh>
+            <sphereGeometry args={[0.08, 16, 16]} />
+            <meshBasicMaterial color="#ffffff" />
+          </mesh>
+          <mesh>
+            <sphereGeometry args={[0.2, 16, 16]} />
+            <meshBasicMaterial color={color} transparent opacity={0.4} blending={THREE.AdditiveBlending} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function ZodiacRing({ show, radius = 12 }) {
+  if (!show) return null;
+  return (
+    <group>
+      {/* Sabuk Holografis Ekliptika */}
+      <mesh rotation={[0, 0, 0]}>
+        <cylinderGeometry args={[radius, radius, 3, 64, 1, true]} />
+        <meshBasicMaterial color="#0f172a" transparent opacity={0.5} side={THREE.DoubleSide} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </mesh>
+      
+      {/* Garis Pembatas Neon Atas & Bawah */}
+      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 1.5, 0]}>
+        <ringGeometry args={[radius - 0.03, radius + 0.03, 64]} />
+        <meshBasicMaterial color="#6366f1" transparent opacity={0.8} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, -1.5, 0]}>
+        <ringGeometry args={[radius - 0.03, radius + 0.03, 64]} />
+        <meshBasicMaterial color="#6366f1" transparent opacity={0.8} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} />
+      </mesh>
+
+      {ZODIACS.map((z, i) => {
+        const angle = Math.PI + (i * (Math.PI * 2)) / 12;
+        const x = Math.cos(angle) * radius;
+        const zPos = Math.sin(angle) * radius;
+        
+        // Memutar rasi bintang agar menghadap pusat (Matahari)
+        const rotationY = -angle + Math.PI / 2;
+
+        return (
+          <group key={i} position={[x, 0, zPos]} rotation={[0, rotationY, 0]}>
+            
+            {/* Visual Bintang 3D */}
+            <ConstellationArt index={i} color={z.color} />
+            
+            {/* Kartu Glassmorphism Holografis */}
+            <Html center occlude={false} zIndexRange={[0, 0]} style={{ pointerEvents: 'none', userSelect: 'none' }}>
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(15,23,42,0.85) 0%, rgba(30,27,75,0.7) 100%)',
+                backdropFilter: 'blur(16px)',
+                border: `1px solid ${z.color}70`,
+                borderRadius: '16px',
+                padding: '8px 18px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                boxShadow: `0 8px 32px rgba(0,0,0,0.8), inset 0 0 20px ${z.color}30`,
+                transform: 'translateY(-40px)',
+              }}>
+                <span style={{ fontSize: '22px', color: z.color, marginBottom: '4px', textShadow: `0 0 15px ${z.color}, 0 0 30px ${z.color}` }}>{z.symbol}</span>
+                <span style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#eef2ff', textTransform: 'uppercase' }}>{z.name}</span>
+              </div>
+            </Html>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function EnergyBeam({ start, end, color }) {
+  const flowRef = useRef();
+  
+  useFrame((_, delta) => {
+    if (flowRef.current?.material) {
+      flowRef.current.material.dashOffset -= delta * 3;
+    }
+  });
+
+  return (
+    <group>
+      {/* Cahaya Luar (Glow) */}
+      <Line points={[start, end]} color={color} lineWidth={8} transparent opacity={0.2} blending={THREE.AdditiveBlending} />
+      {/* Inti Cahaya Padat */}
+      <Line points={[start, end]} color="#ffffff" lineWidth={1} transparent opacity={0.6} blending={THREE.AdditiveBlending} />
+      {/* Aliran Energi Bergerak */}
+      <Line ref={flowRef} points={[start, end]} color={color} lineWidth={3} transparent dashed dashSize={0.4} gapSize={0.4} opacity={1} blending={THREE.AdditiveBlending} />
+    </group>
+  );
+}
+
+function LineOfSight({ show, earthPos }) {
+  if (!show) return null;
+  const radius = 12;
+  const e2s = new THREE.Vector3(-earthPos[0], 0, -earthPos[2]).normalize();
+  const dayLineEnd = e2s.clone().multiplyScalar(radius);
+  const nightLineEnd = new THREE.Vector3(...earthPos).add(e2s.clone().multiplyScalar(-radius + 3.5));
+
+  return (
+    <group>
+      <EnergyBeam start={earthPos} end={dayLineEnd.toArray()} color="#f59e0b" />
+      <EnergyBeam start={earthPos} end={nightLineEnd.toArray()} color="#38bdf8" />
+      
+      {/* Label Malam */}
+      <Html position={nightLineEnd.clone().lerp(new THREE.Vector3(...earthPos), 0.15).toArray()} center style={{ pointerEvents: 'none', userSelect: 'none', whiteSpace: 'nowrap' }}>
+        <div style={{
+          background: 'linear-gradient(90deg, rgba(14,21,37,0) 0%, rgba(14,21,37,0.9) 20%, rgba(14,21,37,0.9) 80%, rgba(14,21,37,0) 100%)',
+          padding: '8px 28px',
+          color: '#38bdf8',
+          fontSize: '11px',
+          fontWeight: '800',
+          letterSpacing: '2px',
+          textTransform: 'uppercase',
+          borderTop: '1px solid rgba(56, 189, 248, 0.6)',
+          borderBottom: '1px solid rgba(56, 189, 248, 0.6)',
+          textShadow: '0 0 15px rgba(56, 189, 248, 1)'
+        }}>
+          ✨ Terlihat Jelas di Malam Hari
+        </div>
+      </Html>
+      
+      {/* Label Siang */}
+      <Html position={dayLineEnd.clone().lerp(new THREE.Vector3(...earthPos), 0.15).toArray()} center style={{ pointerEvents: 'none', userSelect: 'none', whiteSpace: 'nowrap' }}>
+        <div style={{
+          background: 'linear-gradient(90deg, rgba(14,21,37,0) 0%, rgba(14,21,37,0.9) 20%, rgba(14,21,37,0.9) 80%, rgba(14,21,37,0) 100%)',
+          padding: '8px 28px',
+          color: '#f59e0b',
+          fontSize: '11px',
+          fontWeight: '800',
+          letterSpacing: '2px',
+          textTransform: 'uppercase',
+          borderTop: '1px solid rgba(245, 158, 11, 0.6)',
+          borderBottom: '1px solid rgba(245, 158, 11, 0.6)',
+          textShadow: '0 0 15px rgba(245, 158, 11, 1)'
+        }}>
+          ☀️ Tertutup Cahaya Matahari
+        </div>
+      </Html>
+    </group>
   );
 }
 
@@ -257,6 +593,7 @@ function OrbitScene() {
   const dayOfYear = useSimulationStore((s) => s.getDayOfYear());
   const showLabels = useSimulationStore((s) => s.showLabels);
   const showSubsolar = useSimulationStore((s) => s.showSubsolarPoint);
+  const showConstellations = useSimulationStore((s) => s.showConstellations);
 
   const orbitAngle = ((dayOfYear - 80) / 365.25) * Math.PI * 2;
   
@@ -278,6 +615,18 @@ function OrbitScene() {
       <SunMesh />
       <OrbitRing />
 
+      {/* Sun-Earth connecting line */}
+      <Line
+        points={[[0, 0, 0], [earthX, 0, earthZ]]}
+        color="#fbbf24"
+        lineWidth={1}
+        opacity={0.25}
+        transparent
+        dashed
+        dashSize={0.15}
+        gapSize={0.1}
+      />
+
       <EarthMesh
         position={[earthX, 0, earthZ]}
         tiltAngle={23.44}
@@ -288,6 +637,8 @@ function OrbitScene() {
 
       <SeasonLabels show={showLabels} />
       <MonthMarkers show={showLabels} />
+      <ZodiacRing show={showConstellations} />
+      <LineOfSight show={showConstellations} earthPos={[earthX, 0, earthZ]} />
       <OrbitInteraction />
 
       <OrbitControls
@@ -389,13 +740,40 @@ export default function OrbitView() {
   const setViewMode = useSimulationStore((s) => s.setViewMode);
   const showLabels = useSimulationStore((s) => s.showLabels);
   const setShowLabels = useSimulationStore((s) => s.setShowLabels);
+  const showConstellations = useSimulationStore((s) => s.showConstellations);
+  const setShowConstellations = useSimulationStore((s) => s.setShowConstellations);
   const rotateEarth = useSimulationStore((s) => s.rotateEarth);
   const setRotateEarth = useSimulationStore((s) => s.setRotateEarth);
+  const month = useSimulationStore((s) => s.month);
+  const day = useSimulationStore((s) => s.day);
   const declination = useSimulationStore((s) => s.getSunDeclination());
   const rightAscension = useSimulationStore((s) => s.getSunRightAscension());
+  const getSeasonInfo = useSimulationStore((s) => s.getSeasonInfo);
+  const seasonInfo = useMemo(() => getSeasonInfo(), [month, day]);
+  const canvasContainerRef = useRef(null);
+
+  const handleFullscreen = useCallback(() => {
+    const el = canvasContainerRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      el.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
+  const handleScreenshot = useCallback(() => {
+    const canvas = canvasContainerRef.current?.querySelector('canvas');
+    if (!canvas) return;
+    // Need to re-render with preserveDrawingBuffer
+    const link = document.createElement('a');
+    link.download = `simulasi-musim-${new Date().toISOString().slice(0,10)}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }, []);
 
   return (
-    <div className="orbit-panel">
+    <div className="orbit-panel" ref={canvasContainerRef}>
       <div className="orbit-panel__hint">
         {viewMode === 'orbit'
           ? 'klik & seret untuk mengubah perspektif · klik & seret bumi untuk mengubah posisi orbit'
@@ -406,7 +784,11 @@ export default function OrbitView() {
       <Canvas
         className="canvas-3d"
         camera={{ position: [2, 5, 8], fov: 42, near: 0.1, far: 200 }}
-        gl={{ antialias: true, alpha: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2 }}
+        gl={{
+          antialias: true, alpha: true,
+          toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2,
+          preserveDrawingBuffer: true,
+        }}
       >
         {viewMode === 'orbit' ? (
           <Suspense fallback={null}>
@@ -419,12 +801,20 @@ export default function OrbitView() {
         )}
       </Canvas>
 
-      {/* Data overlay — bottom center-left, above the controls */}
+      {/* Season info badge — top right */}
+      <div className="orbit-panel__season-badge">
+        <span>{seasonInfo.iconN} Utara: {seasonInfo.north}</span>
+        <span>{seasonInfo.iconS} Selatan: {seasonInfo.south}</span>
+      </div>
+
+      {/* Data overlay — top left */}
       <div style={{
-        position: 'absolute', bottom: '90px', left: '180px', zIndex: 10,
-        background: 'var(--bg-glass)', backdropFilter: 'blur(8px)',
-        padding: '6px 14px', borderRadius: 'var(--radius-sm)',
-        border: '1px solid var(--border-subtle)',
+        position: 'absolute', top: 'var(--space-lg)', left: 'var(--space-lg)', zIndex: 10,
+        background: 'var(--bg-glass-strong)', backdropFilter: 'blur(16px)',
+        padding: '10px 18px', borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border-medium)',
+        boxShadow: 'var(--shadow-md)',
+        display: 'flex', flexDirection: 'column', gap: '4px'
       }}>
         <div className="orbit-panel__data-row">
           deklinasi matahari: <span>{declination.toFixed(1)}°</span>
@@ -434,31 +824,51 @@ export default function OrbitView() {
         </div>
       </div>
 
-      {/* View mode toggle */}
-      <div className="view-toggle">
-        <label className={`view-toggle__label ${viewMode === 'orbit' ? 'view-toggle__label--active' : ''}`}>
+      {/* Action buttons — top right corner */}
+      <div className="orbit-panel__actions">
+        <button className="orbit-panel__action-btn" onClick={handleScreenshot} title="Screenshot">
+          📸
+        </button>
+        <button className="orbit-panel__action-btn" onClick={handleFullscreen} title="Fullscreen">
+          ⛶
+        </button>
+      </div>
+
+      {/* Unified controls panel — bottom left */}
+      <div className="orbit-panel__controls-card">
+        <label className="orbit-panel__control-row" style={{ gap: '10px' }}>
+          <div className="toggle-switch">
+            <input type="checkbox" checked={rotateEarth} onChange={(e) => setRotateEarth(e.target.checked)} />
+            <span className="toggle-slider"></span>
+          </div>
+          rotasi bumi
+        </label>
+        <div className="orbit-panel__control-divider" />
+        <label className={`orbit-panel__control-row ${viewMode === 'orbit' ? 'orbit-panel__control-row--active' : ''}`}>
           <input type="radio" name="viewMode" checked={viewMode === 'orbit'} onChange={() => setViewMode('orbit')} />
           tampilan orbit
         </label>
-        <label className={`view-toggle__label ${viewMode === 'celestial' ? 'view-toggle__label--active' : ''}`}>
+        <label className={`orbit-panel__control-row ${viewMode === 'celestial' ? 'orbit-panel__control-row--active' : ''}`}>
           <input type="radio" name="viewMode" checked={viewMode === 'celestial'} onChange={() => setViewMode('celestial')} />
           bola langit
         </label>
       </div>
 
-      {/* Rotasi Bumi checkbox */}
-      <div className="checkbox-toggle" style={{ bottom: '70px' }}>
-        <label className="checkbox-toggle__label">
-          <input type="checkbox" checked={rotateEarth} onChange={(e) => setRotateEarth(e.target.checked)} />
-          rotasi bumi
+      {/* Labels toggle — bottom right */}
+      <div className="labels-toggle" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <label className="orbit-panel__control-row" style={{ gap: '10px' }}>
+          <div className="toggle-switch">
+            <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
+            <span className="toggle-slider"></span>
+          </div>
+          label orbit
         </label>
-      </div>
-
-      {/* Labels toggle */}
-      <div className="labels-toggle">
-        <label className="checkbox-toggle__label">
-          <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
-          label
+        <label className="orbit-panel__control-row" style={{ gap: '10px' }}>
+          <div className="toggle-switch">
+            <input type="checkbox" checked={showConstellations} onChange={(e) => setShowConstellations(e.target.checked)} />
+            <span className="toggle-slider"></span>
+          </div>
+          rasi bintang
         </label>
       </div>
     </div>

@@ -66,6 +66,79 @@ function getSunAltitude(latitude, declination) {
   return 90 - Math.abs(latitude - declination);
 }
 
+/**
+ * Menghitung durasi siang (jam) berdasarkan lintang dan deklinasi
+ * Menggunakan rumus: cos(ωs) = -tan(φ) × tan(δ)
+ * dimana ωs = hour angle saat matahari terbit/terbenam
+ */
+function getDaylightHours(latitude, declination) {
+  const latRad = (latitude * Math.PI) / 180;
+  const declRad = (declination * Math.PI) / 180;
+  
+  const cosOmega = -Math.tan(latRad) * Math.tan(declRad);
+  
+  // Polar day (24 jam siang)
+  if (cosOmega < -1) return 24;
+  // Polar night (0 jam siang)
+  if (cosOmega > 1) return 0;
+  
+  const omega = Math.acos(cosOmega);
+  return (omega / Math.PI) * 24;
+}
+
+/**
+ * Info musim berdasarkan bulan (untuk belahan bumi utara)
+ * Returns { north: string, south: string, icon_north: string, icon_south: string }
+ */
+function getSeasonInfo(dayOfYear) {
+  // Based on approximate day ranges for Northern Hemisphere
+  // Spring: Mar 21 (80) - Jun 20 (171)
+  // Summer: Jun 21 (172) - Sep 22 (265)
+  // Autumn: Sep 23 (266) - Dec 20 (354)
+  // Winter: Dec 21 (355) - Mar 20 (79)
+  
+  const seasons = {
+    spring: { north: 'Semi', south: 'Gugur', iconN: '🌸', iconS: '🍂' },
+    summer: { north: 'Panas', south: 'Dingin', iconN: '☀️', iconS: '❄️' },
+    autumn: { north: 'Gugur', south: 'Semi', iconN: '🍂', iconS: '🌸' },
+    winter: { north: 'Dingin', south: 'Panas', iconN: '❄️', iconS: '☀️' },
+  };
+
+  let s;
+  if (dayOfYear >= 80 && dayOfYear < 172) s = seasons.spring;
+  else if (dayOfYear >= 172 && dayOfYear < 266) s = seasons.summer;
+  else if (dayOfYear >= 266 && dayOfYear < 355) s = seasons.autumn;
+  else s = seasons.winter;
+
+  return {
+    north: `Musim ${s.north}`,
+    south: `Musim ${s.south}`,
+    iconN: s.iconN,
+    iconS: s.iconS,
+  };
+}
+
+/**
+ * Info tooltip per bulan
+ */
+function getMonthTooltip(monthIndex) {
+  const tooltips = [
+    'Perihelion (~3 Jan)\nBumi terdekat Matahari',
+    null,
+    'Ekuinoks Vernal (~21 Mar)\nSiang = Malam di seluruh dunia',
+    null,
+    null,
+    'Solstis (~21 Jun)\nSiang terpanjang di utara',
+    null,
+    null,
+    'Ekuinoks Autumnal (~23 Sep)\nSiang = Malam di seluruh dunia',
+    null,
+    null,
+    'Solstis (~21 Des)\nMalam terpanjang di utara',
+  ];
+  return tooltips[monthIndex] || null;
+}
+
 const MONTH_NAMES_ID = [
   'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
   'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'
@@ -90,6 +163,7 @@ const useSimulationStore = create((set, get) => ({
   sunlightMode: 'angle',    // 'angle' | 'spread'
   earthViewMode: 'side',    // 'side' | 'sun'
   showLabels: false,
+  showConstellations: false,
   rotateEarth: true,
   
   // === Computed Values ===
@@ -123,6 +197,18 @@ const useSimulationStore = create((set, get) => ({
     return getSunAltitude(state.latitude, decl);
   },
 
+  getDaylightHours: () => {
+    const state = get();
+    const doy = getDayOfYear(state.month, state.day);
+    const decl = getSunDeclination(doy);
+    return getDaylightHours(state.latitude, decl);
+  },
+
+  getSeasonInfo: () => {
+    const doy = getDayOfYear(get().month, get().day);
+    return getSeasonInfo(doy);
+  },
+
   getDateString: () => {
     const state = get();
     return `${state.day} ${MONTH_FULL_NAMES_ID[state.month]}`;
@@ -150,6 +236,7 @@ const useSimulationStore = create((set, get) => ({
   setSunlightMode: (mode) => set({ sunlightMode: mode }),
   setEarthViewMode: (mode) => set({ earthViewMode: mode }),
   setShowLabels: (show) => set({ showLabels: show }),
+  setShowConstellations: (show) => set({ showConstellations: show }),
   setRotateEarth: (rotate) => set({ rotateEarth: rotate }),
   
   toggleAnimation: () => set((state) => ({ isAnimating: !state.isAnimating })),
@@ -182,13 +269,15 @@ const useSimulationStore = create((set, get) => ({
     doyExact: 80,
     latitude: 10.0,
     isAnimating: false,
+    animationSpeed: 1,
     viewMode: 'orbit',
     sunlightMode: 'angle',
     earthViewMode: 'side',
     showLabels: false,
+    showConstellations: false,
     showSubsolarPoint: true,
   }),
 }));
 
-export { MONTH_NAMES_ID, MONTH_FULL_NAMES_ID };
+export { MONTH_NAMES_ID, MONTH_FULL_NAMES_ID, getMonthTooltip };
 export default useSimulationStore;

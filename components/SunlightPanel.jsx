@@ -169,6 +169,81 @@ function drawSunbeamSpread(ctx, width, height, altitude) {
 
 
 /* =============================================
+   Daylight Duration Gauge — Pie chart showing day vs night
+   ============================================= */
+function DaylightGauge({ daylightHours }) {
+  const nightHours = 24 - daylightHours;
+  const dayAngle = (daylightHours / 24) * Math.PI * 2;
+
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const size = 52;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = size + 'px';
+    canvas.style.height = size + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, size, size);
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = size / 2 - 3;
+
+    // Night (dark blue)
+    ctx.fillStyle = '#1e3a5f';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Day (golden yellow)
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + dayAngle);
+    ctx.closePath();
+    ctx.fill();
+
+    // Center circle (bg)
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }, [daylightHours, dayAngle]);
+
+  return (
+    <div className="daylight-gauge">
+      <canvas ref={canvasRef} />
+      <div className="daylight-gauge__info">
+        <div className="daylight-gauge__row">
+          <span className="daylight-gauge__dot daylight-gauge__dot--day" />
+          siang: <strong>{daylightHours.toFixed(1)}j</strong>
+        </div>
+        <div className="daylight-gauge__row">
+          <span className="daylight-gauge__dot daylight-gauge__dot--night" />
+          malam: <strong>{nightHours.toFixed(1)}j</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* =============================================
    Main SunlightPanel Component
    ============================================= */
 export default function SunlightPanel() {
@@ -179,7 +254,8 @@ export default function SunlightPanel() {
   const setEarthViewMode = useSimulationStore((s) => s.setEarthViewMode);
   const sunAltitude = useSimulationStore((s) => s.getSunAltitude());
   const latitude = useSimulationStore((s) => s.latitude);
-  const getLatitudeString = useSimulationStore((s) => s.getLatitudeString);
+  const latitudeString = useSimulationStore((s) => s.getLatitudeString());
+  const daylightHours = useSimulationStore((s) => s.getDaylightHours());
 
   // Draw canvas
   useEffect(() => {
@@ -230,25 +306,19 @@ export default function SunlightPanel() {
   return (
     <div className="sunlight-panel">
       {/* Mode selector */}
-      <div className="sunlight-panel__mode">
-        <label className="sunlight-panel__mode-option">
-          <input
-            type="radio"
-            name="sunlightMode"
-            checked={sunlightMode === 'spread'}
-            onChange={() => setSunlightMode('spread')}
-          />
-          sebaran cahaya
-        </label>
-        <label className="sunlight-panel__mode-option">
-          <input
-            type="radio"
-            name="sunlightMode"
-            checked={sunlightMode === 'angle'}
-            onChange={() => setSunlightMode('angle')}
-          />
-          sudut cahaya
-        </label>
+      <div className="segmented-control">
+        <button
+          className={`segmented-control__btn ${sunlightMode === 'spread' ? 'segmented-control__btn--active' : ''}`}
+          onClick={() => setSunlightMode('spread')}
+        >
+          Sebaran Cahaya
+        </button>
+        <button
+          className={`segmented-control__btn ${sunlightMode === 'angle' ? 'segmented-control__btn--active' : ''}`}
+          onClick={() => setSunlightMode('angle')}
+        >
+          Sudut Cahaya
+        </button>
       </div>
 
       {/* Canvas */}
@@ -257,9 +327,18 @@ export default function SunlightPanel() {
 
         {/* Data overlay */}
         <div className="sunlight-panel__data">
-          altitude matahari: <span>{sunAltitude.toFixed(1)}°</span><br />
-          lintang pengamat: <span>{getLatitudeString()}</span>
+          <span className="tooltip-container" data-tooltip="Ketinggian sudut matahari di atas ufuk pengamat pada saat tengah hari. Maksimal 90° (tepat di atas kepala).">
+            altitude matahari <span className="tooltip-icon">?</span>
+          </span>: <span>{sunAltitude.toFixed(1)}°</span><br />
+          <span className="tooltip-container" data-tooltip="Posisi lintang lokasi pengamat di permukaan bumi. (Gunakan panel Lintang Pengamat untuk mengubah angka ini).">
+            lintang pengamat <span className="tooltip-icon">?</span>
+          </span>: <span>{latitudeString}</span>
         </div>
+      </div>
+
+      {/* Daylight duration gauge */}
+      <div className="sunlight-panel__daylight">
+        <DaylightGauge daylightHours={daylightHours} />
       </div>
     </div>
   );
